@@ -18,7 +18,6 @@ Pixel = pygame.Color
 Font = pygame.font.Font
 
 
-
 class Direction:
     UP = 0
     RIGHT = 1
@@ -40,6 +39,7 @@ class Color:
 
 
 default_ui_font = Font("fonts/NES_Font.ttf", 32)
+
 
 def null_function():
     pass
@@ -124,9 +124,6 @@ def draw_rounded_border(surface: pygame.Surface, rectangle: Rectangle, border_co
                                              thickness, rectangle[3] + thickness * 2 - offset * 2])
 
 
-
-
-
 def draw_text(surface: pygame.Surface, position_up_left_corner: Vector2, text: str, color: Pixel,
               font: Font = default_ui_font, enable_antialiasing: bool = False):
     text_surface = font.render(text, enable_antialiasing, color)
@@ -172,7 +169,7 @@ class ScanHardware:
             self._buttons[i].previous_state = self._buttons[i].state
             self._buttons[i].state = keys_pressed[i]
 
-    def get_pressed(self):
+    def get_pressed(self) -> list[Key]:
         return self._buttons
 
 
@@ -190,7 +187,7 @@ class Mouse(ScanHardware):
         self._previous_position = Vector2(0, 0)
         self._position = Vector2(0, 0)
 
-    def get_keys_raw_states(self):
+    def get_keys_raw_states(self) -> tuple[bool, bool, bool, bool, bool]:
         return pygame.mouse.get_pressed(self.buttons)
 
     def update_state(self):
@@ -198,10 +195,10 @@ class Mouse(ScanHardware):
         self._previous_position = self._position
         self._position = pygame.mouse.get_pos()
 
-    def get_position(self):
-        return pygame.mouse.get_pos()
+    def get_position(self) -> Vector2:
+        return Vector2(pygame.mouse.get_pos()[0], pygame.mouse.get_pos()[1])
 
-    def get_previous_position(self):
+    def get_previous_position(self) -> Vector2:
         return self._previous_position
 
 
@@ -210,7 +207,7 @@ class UIElement(ABC):
         self._collides_with_mouse = False
         self._active = False
 
-    def on_update(self, collides_with_mouse: bool, mouse_position: Vector2, mouse_key: Key, delta_time_seconds: float):
+    def on_update(self, mouse_already_collides_with_another_element: bool, mouse_position: Vector2, mouse_key: Key, delta_time_seconds: float):
         pass
 
     def draw(self, surface):
@@ -257,15 +254,18 @@ class UIContext:
     def back_layer(self) -> UILayer:
         return self.layers[len(self.layers) - 1]
 
-    def update_state(self, mouse_position: Vector2, mouse_keys: list[Key], delta_time_seconds: float):
-        mouse_collides_with_element = False
-        mouse_controls_element = False
+    def update_state(self, mouse_position: Union[tuple, Vector2], mouse_keys: list[Key], delta_time_seconds: float):
+        mouse_position_vector2 = Vector2(mouse_position[0], mouse_position[1])
+        mouse_collides_with_another_element = False
+        mouse_controls_another_element = False
         mouse_left_key = mouse_keys[Mouse.LEFT]
         for layer in self.layers:
             for element in layer.elements:
-                element.on_update(mouse_collides_with_element, mouse_position, mouse_left_key, delta_time_seconds)
+                element.on_update(mouse_collides_with_another_element or mouse_controls_another_element, mouse_position_vector2, mouse_left_key, delta_time_seconds)
                 if element.collides_with_mouse:
-                    mouse_collides_with_element = True
+                    mouse_collides_with_another_element = True
+                if element.active:
+                    mouse_controls_another_element = True
 
     def draw_elements(self, surface):
         for i in range(len(self.layers) - 1, -1, -1):
@@ -285,6 +285,9 @@ class UIBoxElementStyle:
         self.antialiasing = antialiasing
 
 
+EMPTY_UI_BOX_ELEMENT_STYLE = UIBoxElementStyle(None, None, 0, None, False)
+
+
 class UIBoxElement(UIElement, ABC):
     def __init__(self, position: Vector2, size: Vector2, style: UIBoxElementStyle):
         super().__init__()
@@ -302,6 +305,30 @@ class UIBoxElement(UIElement, ABC):
         return self.position - self.size / 2 - Vector2(self.style.outline, self.style.outline)
 
     @property
+    def position_up_right_corner(self) -> Vector2:
+        return self.position + Vector2(self.size.x, -self.size.y) / 2
+
+    @property
+    def position_up_right_corner_outline(self) -> Vector2:
+        return self.position + Vector2(self.size.x, -self.size.y) / 2 + Vector2(self.style.outline, -self.style.outline)
+
+    @property
+    def position_bottom_right_corner(self) -> Vector2:
+        return self.position + Vector2(self.size.x, self.size.y) / 2
+
+    @property
+    def position_bottom_right_corner_outline(self) -> Vector2:
+        return self.position + Vector2(self.size.x, self.size.y) / 2 + Vector2(self.style.outline, self.style.outline)
+
+    @property
+    def position_bottom_left_corner(self) -> Vector2:
+        return self.position + Vector2(-self.size.x, self.size.y) / 2
+
+    @property
+    def position_bottom_left_corner_outline(self) -> Vector2:
+        return self.position + Vector2(-self.size.x, self.size.y) / 2 + Vector2(-self.style.outline, self.style.outline)
+
+    @property
     def rectangle(self) -> pygame.Rect:
         return pygame.Rect(self.position_up_left_corner[0], self.position_up_left_corner[1], self.size[0], self.size[1])
 
@@ -311,26 +338,43 @@ class UIBoxElement(UIElement, ABC):
         size = self.size + 2 * Vector2(self.style.outline, self.style.outline)
         return pygame.Rect(position[0], position[1], size[0], size[1])
 
-    def on_update(self, collides_with_mouse: bool, mouse_position: Vector2, mouse_key: Key, delta_time_seconds: float):
-        self._collides_with_mouse = collides_with_mouse and point_vs_rect(mouse_position, self.rectangle_with_outline)
+    def on_update(self, mouse_already_collides_with_another_element: bool, mouse_position: Vector2, mouse_key: Key, delta_time_seconds: float):
+        self._collides_with_mouse = not mouse_already_collides_with_another_element and point_vs_rect(mouse_position, self.rectangle_with_outline)
 
 
-class Text:
+class Text(UIBoxElement):
     def __init__(self, position: Union[Vector2, list[float]], color: Pixel, font: Font, text: str, antialiasing: bool = False):
-        self.position = Vector2(position[0], position[1])
+        super().__init__(position, Vector2(0, 0), EMPTY_UI_BOX_ELEMENT_STYLE)
         self.color = color
         self.font = font
         self.text = text
         self.antialiasing = antialiasing
 
+    @property
+    def text_size(self):
+        return Vector2(self.font.size(self.text)[0], self.font.size(self.text)[1])
+
+    @property
+    def rectangle_with_outline(self) -> pygame.Rect:
+        position = self.position_up_left_corner_outline
+        return pygame.Rect(position[0], position[1], self.text_size[0], self.text_size[1])
+
     def draw(self, surface):
         text_surface = self.font.render(self.text, self.antialiasing, self.color)
-        text_size = Vector2(self.font.size(self.text)[0], self.font.size(self.text)[1])
-        text_position = self.position - text_size / 2
+        text_position = self.position - self.text_size / 2
         surface.blit(text_surface, text_position)
 
 
-class TextBox(UIBoxElement):
+class Box(UIBoxElement):
+    def __init__(self, position: Vector2, size: Vector2,
+                 style: UIBoxElementStyle):
+        super().__init__(position, size, style)
+
+    def draw(self, surface):
+        draw_rectangle(surface, self.rectangle, self.style.rectangle_color, self.style.outline, self.style.outline_color)
+
+
+class TextBox(Box):
     def __init__(self, position: Vector2, size: Vector2,
                  style: UIBoxElementStyle,
                  text: str, font: Font = default_ui_font, antialiasing: bool = False):
@@ -340,7 +384,7 @@ class TextBox(UIBoxElement):
         self.antialiasing = antialiasing
 
     def draw(self, surface):
-        draw_rectangle(surface, self.rectangle, self.style.rectangle_color, self.style.outline, self.style.outline_color)
+        super().draw(surface)
 
         ui_text_element = Text(self.position, self.style.content_color, self.font, self.text, self.style.antialiasing)
         ui_text_element.draw(surface)
@@ -371,8 +415,8 @@ class Button(TextBox):
     def pressed(self):
         return self._pressed
 
-    def on_update(self, mouse_already_collides_with_element: bool, mouse_position: Vector2, mouse_key: Key, delta_time_seconds: float):
-        self._collides_with_mouse = not mouse_already_collides_with_element and point_vs_rect(mouse_position, self.rectangle)
+    def on_update(self, mouse_already_collides_with_another_element: bool, mouse_position: Vector2, mouse_key: Key, delta_time_seconds: float):
+        self._collides_with_mouse = not mouse_already_collides_with_another_element and point_vs_rect(mouse_position, self.rectangle)
         self._active = self.collides_with_mouse and mouse_key.pressed
         if self.active:
             self.style = self.style_pressed
@@ -463,10 +507,152 @@ class Reference:
         self.value = value
 
 
+def clamp(x, minimum, maximum):
+    if x < minimum:
+        return minimum
+    elif x > maximum:
+        return maximum
+    return x
 
 
+class SliderValue:
+    SAME_AS_VALUE = None
+    EMPTY = ""
 
-class Slider:
+    def __init__(self, position: Union[float, int], text: str = SAME_AS_VALUE):
+        self.position = position
+        self.text = str(position) if text == self.SAME_AS_VALUE else text
+
+
+class Slider(UIElement):
+    SLIDER_WIDTH = 6
+    KNOB_LENGTH = 20
+    KNOB_WIDTH = 5
+
+    SLIDER_LOCK_ON_RADIUS = 5
+
+    def __init__(self, position: Vector2, length: float, is_vertical: bool,
+                 slider_style: UIBoxElementStyle, knob_style: UIBoxElementStyle,
+                 reference_to_variable: Reference,
+                 min_value: SliderValue, max_value: SliderValue, default_value,
+                 values: list[SliderValue], font: Font,
+                 function_value_in_span_to_value):
+        super().__init__()
+
+        self._is_vertical = is_vertical
+        self._rotation = 90 if is_vertical else 0
+
+        self.position = position
+        self.size = Vector2(self.SLIDER_WIDTH, length) if self._is_vertical else Vector2(length, self.SLIDER_WIDTH)
+        self._length = length
+
+        self.slider_style = slider_style
+        self.knob_style = knob_style
+        self.font = font
+
+        self.min_value = min_value
+        self.max_value = max_value
+        self.default_value = default_value
+        self.values = values
+
+        self.reference = reference_to_variable
+
+        self.function_value_in_span_to_value = lambda value_in_span, minimum_value, maximum_value, values: value_in_span
+        self.function_value_in_span_to_value = \
+            lambda value_in_span, minimum_value, maximum_value, values: \
+                values[int(math.ceil((value_in_span - minimum_value) / (maximum_value - minimum_value) * len(values) - 0.5))]
+
+    @property
+    def length(self):
+        return self._length
+
+    @property
+    def signed_span(self):
+        return self.max_value.position - self.min_value.position
+
+    @property
+    def span(self):
+        return abs(self.signed_span)
+
+    @property
+    def unit_direction(self) -> Vector2:
+        if self._is_vertical:
+            return Vector2(0, 1)
+        return Vector2(1, 0)
+
+    @property
+    def unit_perpendicular_direction(self) -> Vector2:
+        if self._is_vertical:
+            return Vector2(1, 0)
+        return Vector2(0, 1)
+
+    @property
+    def min_point_to_max_point_vector2(self) -> Vector2:
+        return self.unit_direction * self.length
+
+    @property
+    def min_point_position(self) -> Vector2:
+        return self.position - self.min_point_to_max_point_vector2 / 2
+
+    @property
+    def max_point_position(self) -> Vector2:
+        return self.position + self.min_point_to_max_point_vector2 / 2
+
+    @property
+    def rectangle_slider(self) -> Rectangle:
+        position_up_left_corner = self.position - self.size / 2
+        return Rectangle(position_up_left_corner[0], position_up_left_corner[1], self.size[0], self.size[1])
+
+    def set_value_in_span_from_position(self, mouse_position: Vector2):
+        coordinate = mouse_position.y if self._is_vertical else mouse_position.x
+        coordinate_min = self.min_point_position.y if self._is_vertical else self.min_point_position.x
+        coordinate_max = self.max_point_position.y if self._is_vertical else self.max_point_position.x
+
+        delta_s = clamp(coordinate - coordinate_min, 0, coordinate_max - coordinate_min)
+        fraction_of_length = delta_s / self.length
+
+        self.reference.value = self.min_value.position + fraction_of_length * self.signed_span
+
+    @property
+    def knob_box(self) -> Box:
+        knob_size = Vector2(self.KNOB_LENGTH, self.KNOB_WIDTH) if self._is_vertical else Vector2(self.KNOB_WIDTH, self.KNOB_LENGTH)
+        knob = Box(Vector2(0, 0), knob_size, self.knob_style)
+
+        knob.position += self.min_point_position
+
+        delta_s_vector2 = (self.min_point_to_max_point_vector2 / self.span) * abs(self.reference.value - self.min_value.position)
+        knob.position += delta_s_vector2
+
+        return knob
+
+    def on_update(self, mouse_already_collides_with_another_element: bool, mouse_position: Vector2, mouse_key: Key, delta_time_seconds: float):
+        if not mouse_already_collides_with_another_element and not self.active:
+            if point_vs_rect(mouse_position, self.knob_box.rectangle_with_outline) and mouse_key.pressed:
+                self._active = True
+            elif point_vs_rect(mouse_position, self.rectangle_slider) and (mouse_key.pressed or mouse_key.held):
+                self._active = True
+                self.set_value_in_span_from_position(mouse_position)
+        elif self.active and mouse_key.released:
+            self._active = False
+
+        if self.active and mouse_key.held:
+            self.set_value_in_span_from_position(mouse_position)
+
+    def draw(self, surface):
+        draw_rectangle(surface, self.rectangle_slider, self.slider_style.rectangle_color, self.slider_style.outline, self.slider_style.outline_color)
+        self.knob_box.draw(surface)
+
+
+class SliderRigid:
+    def __init__(self, position: Vector2, length: float, is_vertical: bool,
+                 slider_style: UIBoxElementStyle, knob_style: UIBoxElementStyle,
+                 reference_to_variable: Reference,
+                 default_value: SliderValue,
+                 values: list[SliderValue], font: Font):
+        super().__init__(position, length, is_vertical, slider_style, knob_style, reference_to_variable, None)
+
+
+class SliderLegacy:
     def __init__(self, pos, sliderSize, defaultValue, minValue, maxValue):
         self.pos = pos
         self.sliderSize = sliderSize

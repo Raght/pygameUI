@@ -49,6 +49,7 @@ ui_context.front_layer().add_element(text_button)
 
 delta_time = 0
 
+
 if __name__ == "__main__":
     while True:
         sc.fill(Color.BLACK)
