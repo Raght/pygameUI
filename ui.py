@@ -39,6 +39,7 @@ class Color:
 
 
 default_ui_font = Font("fonts/NES_Font.ttf", 32)
+default_ui_font_slider_tick_mark = Font("fonts/NES_Font.ttf", 24)
 
 
 def null_function():
@@ -321,6 +322,10 @@ class UIBoxElement(UIElement, ABC):
         return self.position + Vector2(self.size.x, self.size.y) / 2 + Vector2(self.style.outline, self.style.outline)
 
     @property
+    def size_with_outline(self) -> Vector2:
+        return Vector2(self.size.x, self.size.y) + 2 * Vector2(self.style.outline, self.style.outline)
+
+    @property
     def position_bottom_left_corner(self) -> Vector2:
         return self.position + Vector2(-self.size.x, self.size.y) / 2
 
@@ -415,8 +420,8 @@ class Button(TextBox):
     def pressed(self):
         return self._pressed
 
-    def on_update(self, mouse_already_collides_with_another_element: bool, mouse_position: Vector2, mouse_key: Key, delta_time_seconds: float):
-        self._collides_with_mouse = not mouse_already_collides_with_another_element and point_vs_rect(mouse_position, self.rectangle)
+    def on_update(self, mouse_collides_with_another_element: bool, mouse_controls_another_active_element: bool, mouse_position: Vector2, mouse_key: Key, delta_time_seconds: float):
+        self._collides_with_mouse = not mouse_collides_with_another_element and not mouse_controls_another_active_element and point_vs_rect(mouse_position, self.rectangle)
         self._active = self.collides_with_mouse and mouse_key.pressed
         if self.active:
             self.style = self.style_pressed
@@ -524,23 +529,41 @@ class SliderValue:
         self.text = str(position) if text == self.SAME_AS_VALUE else text
 
 
+def _function_value_in_span_lock_to_nearest(value_in_span, minimum_value, maximum_value, step, offset):
+    step_remainder = (value_in_span - minimum_value + offset) % step
+    if step_remainder < step / 2:
+        return max(value_in_span - step_remainder, minimum_value)
+    elif step_remainder >= step / 2:
+        return min(value_in_span + (step - step_remainder), maximum_value)
+
 class Slider(UIElement):
-    SLIDER_WIDTH = 6
+    LEFT = -1
+    RIGHT = 1
+    UP = -1
+    DOWN = 1
+
+    FLOAT_PRECISION_SHOWN = 2
+
+    SLIDER_WIDTH = 5
     KNOB_LENGTH = 20
     KNOB_WIDTH = 5
+    TICK_MARK_LENGTH = 15
+    TICK_MARK_WIDTH = 3
+
+    TEXT_LABEL_OFFSET = 7
 
     SLIDER_LOCK_ON_RADIUS = 5
 
-    def __init__(self, position: Vector2, length: float, is_vertical: bool,
-                 slider_style: UIBoxElementStyle, knob_style: UIBoxElementStyle,
+    def __init__(self, position: Vector2, length: float, is_vertical: bool, tick_mark_text_side,
+                 slider_style: UIBoxElementStyle, knob_style: UIBoxElementStyle, tick_mark_style: UIBoxElementStyle,
                  reference_to_variable: Reference,
-                 min_value: SliderValue, max_value: SliderValue, default_value,
-                 values: list[SliderValue], font: Font,
-                 function_value_in_span_to_value):
+                 min_value: SliderValue, max_value: SliderValue, default_value: SliderValue,
+                 values_to_display: list[SliderValue],
+                 font: Font = default_ui_font_slider_tick_mark, text_color: Union[Pixel, None] = None):
         super().__init__()
 
         self._is_vertical = is_vertical
-        self._rotation = 90 if is_vertical else 0
+        self._tick_mark_text_side = tick_mark_text_side
 
         self.position = position
         self.size = Vector2(self.SLIDER_WIDTH, length) if self._is_vertical else Vector2(length, self.SLIDER_WIDTH)
@@ -548,19 +571,44 @@ class Slider(UIElement):
 
         self.slider_style = slider_style
         self.knob_style = knob_style
+        self.tick_mark_style = tick_mark_style
         self.font = font
+        self.text_color = text_color if text_color is not None else self.tick_mark_style.rectangle_color
 
         self.min_value = min_value
         self.max_value = max_value
         self.default_value = default_value
-        self.values = values
+        self.values_to_display = values_to_display
 
-        self.reference = reference_to_variable
+        self._value_in_span = default_value.position
+        self._reference = reference_to_variable
+
 
         self.function_value_in_span_to_value = lambda value_in_span, minimum_value, maximum_value, values: value_in_span
-        self.function_value_in_span_to_value = \
+        self.function_value_in_span_lock_to_nearest = _function_value_in_span_lock_to_nearest
+        self.function_value_in_span_to_value_in_reference = \
             lambda value_in_span, minimum_value, maximum_value, values: \
                 values[int(math.ceil((value_in_span - minimum_value) / (maximum_value - minimum_value) * len(values) - 0.5))]
+
+    @property
+    def is_vertical(self):
+        return self._is_vertical
+
+    @property
+    def tick_mark_text_side(self):
+        return self._tick_mark_text_side
+
+    def projection_vector(self, vector):
+        return Vector2(0, vector[1]) if self.is_vertical else Vector2(vector[0], 0)
+
+    def projection_float(self, vector):
+        return vector[1] if self.is_vertical else vector[0]
+
+    def projection_orthogonal_vector(self, vector):
+        return Vector2(vector[0], 0) if self.is_vertical else Vector2(0, vector[1])
+
+    def projection_orthogonal_float(self, vector):
+        return vector[0] if self.is_vertical else vector[1]
 
     @property
     def length(self):
@@ -576,15 +624,11 @@ class Slider(UIElement):
 
     @property
     def unit_direction(self) -> Vector2:
-        if self._is_vertical:
-            return Vector2(0, 1)
-        return Vector2(1, 0)
+        return Vector2(0, 1) if self.is_vertical else Vector2(1, 0)
 
     @property
     def unit_perpendicular_direction(self) -> Vector2:
-        if self._is_vertical:
-            return Vector2(1, 0)
-        return Vector2(0, 1)
+        return Vector2(1, 0) if self.is_vertical else Vector2(0, 1)
 
     @property
     def min_point_to_max_point_vector2(self) -> Vector2:
@@ -603,27 +647,67 @@ class Slider(UIElement):
         position_up_left_corner = self.position - self.size / 2
         return Rectangle(position_up_left_corner[0], position_up_left_corner[1], self.size[0], self.size[1])
 
-    def set_value_in_span_from_position(self, mouse_position: Vector2):
-        coordinate = mouse_position.y if self._is_vertical else mouse_position.x
-        coordinate_min = self.min_point_position.y if self._is_vertical else self.min_point_position.x
-        coordinate_max = self.max_point_position.y if self._is_vertical else self.max_point_position.x
+    def value_in_span_to_reference_value(self, value_in_span):
+        pass
+
+    def reference_value_to_value_in_span(self, reference_value: Union[float, int]) -> float:
+        pass
+
+    @property
+    def value_in_span(self):
+        return self._value_in_span
+
+    @value_in_span.setter
+    def value_in_span(self, value):
+        self._value_in_span = value
+        self._reference.value = self.value_in_span_to_reference_value(value)
+
+    @property
+    def reference_value(self):
+        return self._reference.value
+
+    @reference_value.setter
+    def reference_value(self, reference_value: Union[int, float]):
+        self._reference.value = reference_value
+        self._value_in_span = self.reference_value_to_value_in_span(reference_value)
+
+    def get_reference(self) -> Reference:
+        return self._reference
+
+    def reset_value(self):
+        self.value_in_span = self.default_value
+
+    def value_in_span_to_position_vector2(self, value_in_span: float) -> Vector2:
+        position = self.min_point_position
+        position += (self.min_point_to_max_point_vector2 / self.signed_span) * (value_in_span - self.min_value.position)
+
+        return position
+
+    def position_of_knob_to_value_in_span(self, knob_position: float) -> float:
+        coordinate = knob_position
+        coordinate_min = self.projection_float(self.min_point_position)
+        coordinate_max = self.projection_float(self.max_point_position)
 
         delta_s = clamp(coordinate - coordinate_min, 0, coordinate_max - coordinate_min)
         fraction_of_length = delta_s / self.length
 
-        self.reference.value = self.min_value.position + fraction_of_length * self.signed_span
+        return self.min_value.position + fraction_of_length * self.signed_span
+
+    def position_of_mouse_to_value_in_span(self, mouse_position: Vector2):
+        return self.position_of_knob_to_value_in_span(self.projection_float(mouse_position))
 
     @property
     def knob_box(self) -> Box:
         knob_size = Vector2(self.KNOB_LENGTH, self.KNOB_WIDTH) if self._is_vertical else Vector2(self.KNOB_WIDTH, self.KNOB_LENGTH)
-        knob = Box(Vector2(0, 0), knob_size, self.knob_style)
-
-        knob.position += self.min_point_position
-
-        delta_s_vector2 = (self.min_point_to_max_point_vector2 / self.span) * abs(self.reference.value - self.min_value.position)
-        knob.position += delta_s_vector2
+        knob = Box(self.value_in_span_to_position_vector2(self.value_in_span), knob_size, self.knob_style)
 
         return knob
+
+    def tick_mark(self, value_in_span) -> Box:
+        tick_mark_size = Vector2(self.TICK_MARK_LENGTH, self.TICK_MARK_WIDTH) if self._is_vertical else Vector2(self.TICK_MARK_WIDTH, self.TICK_MARK_LENGTH)
+        tick_mark = Box(self.value_in_span_to_position_vector2(value_in_span), tick_mark_size, self.tick_mark_style)
+
+        return tick_mark
 
     def on_update(self, mouse_already_collides_with_another_element: bool, mouse_position: Vector2, mouse_key: Key, delta_time_seconds: float):
         if not mouse_already_collides_with_another_element and not self.active:
@@ -631,25 +715,102 @@ class Slider(UIElement):
                 self._active = True
             elif point_vs_rect(mouse_position, self.rectangle_slider) and (mouse_key.pressed or mouse_key.held):
                 self._active = True
-                self.set_value_in_span_from_position(mouse_position)
+                self.value_in_span = self.position_of_mouse_to_value_in_span(mouse_position)
         elif self.active and mouse_key.released:
             self._active = False
 
         if self.active and mouse_key.held:
-            self.set_value_in_span_from_position(mouse_position)
+            self.value_in_span = self.position_of_mouse_to_value_in_span(mouse_position)
 
     def draw(self, surface):
         draw_rectangle(surface, self.rectangle_slider, self.slider_style.rectangle_color, self.slider_style.outline, self.slider_style.outline_color)
+
+        for list_of_values_to_display in [self.min_value, self.max_value, self.default_value], self.values_to_display:
+            for value_to_display in list_of_values_to_display:
+                value_in_span = self.reference_value_to_value_in_span(value_to_display.position)
+                tick_mark = self.tick_mark(value_in_span)
+                tick_mark.draw(surface)
+                text_size = Vector2(self.font.size(value_to_display.text)[0], self.font.size(value_to_display.text)[1])
+                tick_mark_text_position = tick_mark.position + \
+                                          self.tick_mark_text_side * self.unit_perpendicular_direction * (
+                                              self.projection_orthogonal_float(self.knob_box.size_with_outline) / 2 +
+                                              self.projection_orthogonal_float(text_size) / 2 +
+                                              self.projection_orthogonal_float(Vector2(self.TEXT_LABEL_OFFSET))
+                                          )
+                #line1point1 = tick_mark.position
+                #line1point2 = line1point1 + self.tick_mark_text_side * self.unit_perpendicular_direction * (
+                #        self.projection_orthogonal_float(self.knob_box.size_with_outline) / 2)
+                #line2point1 = line1point2
+                #line2point2 = line1point2 + self.tick_mark_text_side * self.unit_perpendicular_direction * (
+                #        self.projection_orthogonal_float(text_size) / 2
+                #)
+                #pygame.draw.circle(surface, Color.MAGENTA, line1point1, 2)
+                #pygame.draw.line(surface, Color.WHITE, line1point1, line1point2)
+                #pygame.draw.circle(surface, Color.MAGENTA, line1point2, 2)
+                #pygame.draw.line(surface, Color.WHITE, line2point1, line2point2)
+                #pygame.draw.circle(surface, Color.MAGENTA, line2point2, 2)
+                #additional_offset = self.tick_mark_text_side * self.unit_perpendicular_direction * (self.projection_orthogonal_float(self.knob_box.size) / 2 + self.projection_orthogonal_float(Vector2(self.TEXT_LABEL_OFFSET)))
+                #tick_mark_text_position += additional_offset
+                tick_mark_text = Text(tick_mark_text_position, self.text_color, self.font, value_to_display.text)
+                tick_mark_text.draw(surface)
+
         self.knob_box.draw(surface)
 
 
-class SliderRigid:
-    def __init__(self, position: Vector2, length: float, is_vertical: bool,
-                 slider_style: UIBoxElementStyle, knob_style: UIBoxElementStyle,
+class SliderFree(Slider):
+    def __init__(self, position: Vector2, length: float, is_vertical: bool, tick_mark_text_side,
+                 slider_style: UIBoxElementStyle, knob_style: UIBoxElementStyle, tick_mark_style: UIBoxElementStyle,
                  reference_to_variable: Reference,
-                 default_value: SliderValue,
-                 values: list[SliderValue], font: Font):
-        super().__init__(position, length, is_vertical, slider_style, knob_style, reference_to_variable, None)
+                 min_value: SliderValue, max_value: SliderValue, default_value: SliderValue,
+                 values_to_display: list[SliderValue],
+                 font: Font = default_ui_font_slider_tick_mark, text_color: Union[Pixel, None] = None):
+        super().__init__(position, length, is_vertical, tick_mark_text_side,
+                         slider_style, knob_style, tick_mark_style,
+                         reference_to_variable,
+                         min_value, max_value, default_value, values_to_display,
+                         font, text_color)
+
+    def value_in_span_to_reference_value(self, value_in_span):
+        return value_in_span
+
+    def reference_value_to_value_in_span(self, reference_value: Union[float, int]) -> float:
+        return reference_value
+
+
+class SliderWithStep(Slider):
+    def __init__(self, position: Vector2, length: float, is_vertical: bool, tick_mark_text_side,
+                 slider_style: UIBoxElementStyle, knob_style: UIBoxElementStyle, tick_mark_style: UIBoxElementStyle,
+                 reference_to_variable: Reference,
+                 min_value: SliderValue, max_value: SliderValue, default_value: SliderValue,
+                 values_to_display: list[SliderValue],
+                 font: Font = default_ui_font_slider_tick_mark, text_color: Union[Pixel, None] = None):
+        pass
+
+    def value_in_span_to_reference_value(self, value_in_span):
+        return value_in_span
+
+    def reference_value_to_value_in_span(self, reference_value: Union[float, int]) -> float:
+        return reference_value
+
+
+class SliderDiscrete(Slider):
+    def __init__(self, position: Vector2, length: float, is_vertical: bool, tick_mark_text_side,
+                 slider_style: UIBoxElementStyle, knob_style: UIBoxElementStyle, tick_mark_style: UIBoxElementStyle,
+                 reference_to_variable: Reference,
+                 values: list[SliderValue], default_value: SliderValue,
+                 font: Font = default_ui_font_slider_tick_mark, text_color: Union[Pixel, None] = None):
+        super().__init__(position, length, is_vertical, tick_mark_text_side,
+                         slider_style, knob_style, tick_mark_style,
+                         reference_to_variable,
+                         SliderValue(0, values[0].text), SliderValue(0, values[-1].text), values[], values_to_display,
+                         font, text_color)
+        self.values = values
+
+    def value_in_span_to_reference_value(self, value_in_span):
+        return self.values[int(math.ceil((value_in_span - self.min_value) / (self.max_value.position - self.min_value.position) * len(self.values) - 0.5))]
+
+    def reference_value_to_value_in_span(self, reference_value: Union[float, int]) -> float:
+        return reference_value
 
 
 class SliderLegacy:

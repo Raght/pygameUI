@@ -61,29 +61,41 @@ previous_point_y = (function_range_y.stop + function_range_y.start) / 2
 point_x = ui.Reference((function_range_x.stop + function_range_x.start) / 2)
 point_y = ui.Reference((function_range_y.stop + function_range_y.start) / 2)
 
-SALAD_COLOR = ui.Pixel(90, 198, 67)
+#SALAD_COLOR = ui.Pixel(90, 198, 67)
+SALAD_COLOR = ui.Pixel(70, 160, 0)
+SALAD_COLOR = ui.Pixel(0, 190, 70)
+SALAD_COLOR = ui.Pixel(30, 140, 30)
 
-slider_style = ui.UIBoxElementStyle(Color.GREEN, None, 0, None)
+slider_style = ui.UIBoxElementStyle(ui.Pixel(0, 255, 0), None, 0, None)
 knob_style = ui.UIBoxElementStyle(Color.GREEN, None, 5, SALAD_COLOR)
+tick_mark_style = ui.UIBoxElementStyle(Color.GREEN, None, 0, None)
 
 window_to_slider_gap = 25
 
-slider_x = ui.Slider(window_function.position_bottom_left_corner + Vector2(window_function.size.x / 2, window_to_slider_gap), window_function.size.x, False,
-                     slider_style, knob_style,
-                     point_x,
-                     ui.SliderValue(function_range_x.start, str(function_range_x.start)),
-                     ui.SliderValue(function_range_x.stop, str(function_range_x.stop)),
-                     point_x.value,
-                     [],
-                     ui.default_ui_font, ui.null_function)
-slider_y = ui.Slider(window_function.position_up_left_corner + Vector2(-window_to_slider_gap, window_function.size.y / 2), window_function.size.y * function_range_y_span / function_range_x_span, True,
-                     slider_style, knob_style,
-                     point_y,
-                     ui.SliderValue(function_range_y.stop, str(function_range_y.start)),
-                     ui.SliderValue(function_range_y.start, str(function_range_y.stop)),
-                     point_y.value,
-                     [],
-                     ui.default_ui_font, ui.null_function)
+r, g, b = ui.Reference(0), ui.Reference(0), ui.Reference(0)
+
+slider_x = ui.SliderFree(window_function.position_bottom_left_corner + Vector2(window_function.size.x / 2, window_to_slider_gap),
+                         window_function.size.x,
+                         False, ui.SliderFree.DOWN,
+                         slider_style, knob_style, tick_mark_style,
+                         point_x,
+                         ui.SliderValue(function_range_x.start, "-PI/2"),
+                         ui.SliderValue(function_range_x.stop, "PI/2"),
+                         ui.SliderValue(point_x.value),
+                         [],
+                         ui.default_ui_font)
+slider_y = ui.SliderFree(window_function.position_up_left_corner + Vector2(-window_to_slider_gap, window_function.size.y / 2),
+                         window_function.size.y * function_range_y_span / function_range_x_span,
+                         True, ui.SliderFree.LEFT,
+                         slider_style, knob_style, tick_mark_style,
+                         point_y,
+                         ui.SliderValue(function_range_y.stop),
+                         ui.SliderValue(function_range_y.start),
+                         ui.SliderValue(point_y.value),
+                         [],
+                         ui.default_ui_font)
+
+#slider_r = ui.SliderFree()
 
 ui_context = ui.UIContext(2)
 
@@ -127,9 +139,9 @@ if __name__ == "__main__":
         ui_context.draw_elements(screen)
 
         if approximately_equal(point_x.value, previous_point_x):
-            point_x.value = function_y_to_x(point_y.value)
+            slider_x.reference_value = function_y_to_x(point_y.value)
         elif approximately_equal(point_y.value, previous_point_y):
-            point_y.value = function_x_to_y(point_x.value)
+            slider_y.reference_value = function_x_to_y(point_x.value)
 
         counter = 0
         previous_point = None
